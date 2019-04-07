@@ -1,0 +1,161 @@
+---
+title: "Polling Data from North Carolina's 9th Congressional District"
+author: "Andres de Loera-Brust"
+date: "April 7, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#I begin as always with loading the packages I will use.
+library(gt)
+library(tidyverse)
+library(broom)
+library(naniar)
+
+#Next I load in the poll data I will be using to create the charts and tables. 
+poll <- read_csv(
+  file = "ps_4_elections-poll-nc09-3.csv",
+  col_types = cols(
+    .default = col_character(),
+    turnout_scale = col_double(),
+    turnout_score = col_double(),
+    w_LV = col_double(),
+    w_RV = col_double(),
+    final_weight = col_double(),
+    timestamp = col_datetime(format = "")))
+
+#Now I recode the response variable so the values that give "3" aren't problematic later on.
+poll$response <- poll$response %>% fct_recode(Third = "3")
+
+#I also order the education, ethnicity, and party ID variables by hand because I will want them ordered later.
+poll$race_eth <- poll$race_eth %>% fct_relevel("White", "Black", "Hispanic", "Asian", "Other")
+
+poll$educ <- poll$educ %>% fct_relevel("Graduate or Professional Degree", "Bachelors' degree", "Some college or trade school", "High school", "Grade school")
+
+poll$file_party <- poll$file_party %>% fct_relevel("Republican", "Democratic", "Other")
+
+```
+
+#Polling By Race and Party Identification
+
+```{r table, echo = FALSE} 
+#To begin I create a dataset with the information and shape that we want: 
+#A five by three table where each row represents an ethnicity 
+#and the columns are the percentage of the vote for each party 
+
+poll %>% 
+  #I begin by selecting only the variables I'll use: response, race/ethnicity, and the survey weights.
+  select(response, race_eth, final_weight) %>% 
+  #I then group by race/ethnicity and response to get total counts for each cell.
+  group_by(race_eth, response) %>% 
+  #When I sum to get total counts for each cell use to survey weights to make sure my results are representative.
+  summarize(total = sum(final_weight)) %>%   
+  #Next I drop the observations I cant work with because they dont have one of the key variables.
+  filter(race_eth != "[DO NOT READ] Don't know/Refused") %>%
+  #Now I tidy the data to get the format we want
+  spread(key =  response, value = total) %>%
+  #Since there is an NA in the resulting table which will cause problems later I replace NA's with zeros.
+  replace(is.na(.), 0) %>%
+  #Now I turn the counts I have in each cell into proportions
+  mutate(all = Dem + Rep + Und + Third, 
+         Dem = Dem / all,
+         Rep = Rep / all,
+         Und = Und / all) %>% 
+  select(-all, -Third) %>%
+  #I also convert the zero value for asian undecideds back into an "NA". 
+  replace_with_na(replace = list(Und = 0)) %>%
+  #Finally I ungroup to make the gt commands below work. 
+  ungroup() %>%
+
+#Now I use the gt package to turn the tibble I have into a chart like the one in the PSet description
+gt() %>%
+  #I add a title and subtitle to describe what the chart is showing.
+  tab_header(
+    title = "Polling Results in the North Carolina 9th Congressional District",
+    subtitle = "Based on 3rd wave of polling, 10/26/18-10/31/18"
+    ) %>% 
+  #I also add a note about the source of our data, which was also absent from the example. 
+  tab_source_note(
+    source_note = "Source: New York Times Upshot/Siena College 2018 live polls"
+    ) %>%
+  #I use unabreviated column labels because I believe it is marginally clearer. 
+  cols_label(
+    race_eth = "Race/Ethnicity",
+    Dem = "Democrat",
+    Rep = "Republican",
+    Und = "Undecided"
+  ) %>%
+  #I format the numbers, previously proportions, into percentages, and round to integer values.
+  fmt_percent(columns = vars(Dem, Rep, Und),
+              decimals = 0) 
+  
+```
+
+#Survey Weights by Education Level
+```{r violins, echo = FALSE}
+#Now I turn to making a violin plot of the survey weights by education level.
+
+#First I select the data I want from the entire poll. This time I want to keep the individual observations 
+#but I just need the education and survey weights variables.
+poll %>%
+  select(educ, final_weight) %>%
+  #I also drop the people who did not provide their education level. 
+  filter(educ != "[DO NOT READ] Refused") %>%
+
+#Now I pipe that into ggplot to make a violin plot. 
+  #To get the order and orientiation of variables shown in the example I have to place weight on the y axis 
+  #and reversed education on the x, then flip the coordinates. 
+ggplot(aes(y = final_weight, x = reorder(educ, desc(educ)))) + 
+  geom_violin() + 
+  coord_flip() +
+  #I also want to add dots to this plot, which I do with geom_jitter
+  geom_jitter(position=position_jitter(0.2), alpha = 0.5) +
+  #Then I add the title, subtitle, caption, and labels to match the example. 
+  labs(title = "More Educated Matter Less in North Carolina 9th", 
+       subtitle = "Poll gives more weight to people who are less likely to participate in polls",
+       caption = "New York Times Upshot/Siena College 2018 live polls",
+       y = "Weight Given to Respondent in Calculating Poll Results",
+       x = NULL) 
+  
+```
+
+#Age and Party ID
+
+```{r cool, echo = FALSE}
+#Finally I create a chart showing how party identification varies across ages. 
+
+#First I create a datatable with the percentage of each age group identifying with each party
+poll %>% 
+  #For this I select the variables for party identification, age, and survey weight. 
+  select(file_party, ager, final_weight) %>% 
+  #Before going further I remove the observations with unknown ages.
+  filter(ager != "[DO NOT READ] Refused") %>% 
+  #Then I group by age and party identification.
+  group_by(ager, file_party) %>% 
+  #I then get counts for each combination of party ID and age, weighted by the survey weights.
+  summarize(total = sum(final_weight)) %>%   
+  #Then I get the percentages of each age group that each party identification category represents.
+  mutate(freq = total / sum(total), pct = round((freq*100), 0)) %>%
+  #Lastly I ungroup for peace of mind. 
+  ungroup() %>%
+
+#I then feed that data table into ggplot and make some column charts broken down by age group. 
+#I am seeking to emulate Figure 5.3: Religious preferences by Region in the data visualization textbook, 
+  #so I assign party to the x axis and the fill aesthetic, flip the coordinates, and facet the grid by age group. 
+  ggplot(aes(x = reorder(file_party, desc(file_party)), y = pct, fill = file_party)) + 
+  geom_col(position = "dodge2") + 
+  coord_flip() + 
+  facet_grid(~ager) + 
+  #I also manually decide the colors to correspond to the colors traditionally associated with the parties. 
+  #I assign black to the "Other" category to avoid association with any particular third party or partisan lean.
+  scale_fill_manual(values=c("Republican" = "red", "Democratic" = "blue", "Other" = "black")) +
+  #Finally I add some descriptive labels. 
+  labs(x = NULL, 
+       y = "Percent", 
+       fill = "Party ID",
+       title = "Party Identification by Age in NC's 9th",
+       caption = "Source: New York Times Upshot/Siena College 2018 live polls") 
+  
+```
